@@ -1,0 +1,83 @@
+/* style.css */
+
+/* Page background & font */
+body, .stApp {
+  background-color: #fff5f5; /* soft white-pink backdrop */
+  font-family: 'Comic Sans MS', Arial, sans-serif;
+  color: #8b0000; /* deep red text */
+/* Main container styling */
+}
+.block-container {
+  padding: 2rem !important;
+  background: #ecc5c5;
+  border: 6px solid #c91212;
+  border-radius: 25px;
+;}
+
+/* Hide default menu, header & footer */
+#MainMenu, header, footer {
+  visibility: hidden;
+}
+
+/* Headings with centered hearts, sparkles, bows, balloons */
+h1, h2, h3 {
+  position: relative;
+  color: #b30000;
+  text-align: center;
+  margin: 1.5rem 0;
+  font-weight: bold;
+  text-shadow: 2px 2px #ffcccc;
+}
+
+/* Decorative line above and below headings */
+ h1::after,
+ h2::after,
+ h3::after {
+  content: '❤✨🎀🎈✨❤';
+  display: block;
+  font-size: 1.5em;
+  color: #ff0000;
+  text-align: center;
+  animation: pulse 1.5s infinite;
+  margin: 0.3em 0;
+}
+
+/* Pulse animation for decorations */
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.2); opacity: 0.8; }
+}
+
+/* Paragraph sparkles */
+p::before {
+  content: '✨';
+  margin-right: 0.4em;
+  color: #ff4d4d;
+}
+
+/* List items with balloons */
+li::before {
+  content: '🎈';
+  margin-right: 0.4em;
+  color: #ff0000;
+}
+
+/* Text legibility tweaks */
+p, li {
+  line-height: 1.6;
+  font-size: 1.05em;
+}
+
+a {
+  color: #cc0000 !important;
+  font-weight: bold;
+  text-decoration: none;
+  border-bottom: 2px dashed #ff6666;
+  padding: 0.2em;
+}
+
+a:hover {
+  color: #ff0000 !important;
+  text-decoration: underline;
+  background-color: #fff0f0;
+}
