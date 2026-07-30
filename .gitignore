@@ -1,12 +1,17 @@
-   # Ignore virtual environment
+# Ignore virtual environments
 venv/
 ENV/
 env/
+.venv/
+.venv_fresh/
 
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
+
+# Streamlit secrets (never commit API keys)
+.streamlit/secrets.toml
 
 # VS Code settings
 .vscode/

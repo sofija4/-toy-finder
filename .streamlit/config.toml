@@ -1,0 +1,11 @@
+[theme]
+# The one accent color for the whole app. Change this single line to re-theme.
+primaryColor = "#E8674C"
+
+backgroundColor = "#FAFAF8"
+secondaryBackgroundColor = "#F1F0ED"
+textColor = "#2B2B2B"
+font = "sans serif"
+
+[server]
+headless = true
