@@ -1,8 +1,25 @@
-/* style.css — minimal theme layer on top of .streamlit/config.toml.
-   To change the accent color, edit --accent below (and primaryColor in config.toml). */
+/* style.css — theme layer on top of .streamlit/config.toml.
+   Palette: coral is the one primary accent (also set as primaryColor in config.toml);
+   teal and yellow are supporting colors used only for tags, kept soft/pastel so they
+   read as warm and playful rather than a rainbow of competing colors. */
+
+@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@600;700&display=swap');
 
 :root {
+  /* Each palette color is defined once; -dark/-soft shades are derived from it,
+     so re-theming a color only ever means editing this one base line. */
   --accent: #E8674C;
+  --accent-dark: color-mix(in srgb, var(--accent) 78%, black);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, white);
+
+  --teal: #4FA8A0;
+  --teal-dark: color-mix(in srgb, var(--teal) 70%, black);
+  --teal-soft: color-mix(in srgb, var(--teal) 14%, white);
+
+  --yellow: #F2B84B;
+  --yellow-dark: color-mix(in srgb, var(--yellow) 55%, black);
+  --yellow-soft: color-mix(in srgb, var(--yellow) 18%, white);
+
   --text: #2B2B2B;
   --text-muted: #6B6B6B;
   --surface: #FFFFFF;
@@ -25,14 +42,34 @@ body, .stApp {
 }
 
 h1, h2, h3 {
-  font-weight: 600;
+  font-family: "Quicksand", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 700;
   color: var(--text);
   letter-spacing: -0.01em;
 }
 
 h1 {
-  font-size: 2rem;
+  font-size: 2.25rem;
   margin-bottom: 0.25rem;
+}
+
+/* Hero */
+.hero {
+  background: linear-gradient(120deg, var(--accent-soft) 0%, var(--teal-soft) 100%);
+  border-radius: 20px;
+  padding: 2.25rem 2.5rem;
+  margin-bottom: 2rem;
+}
+
+.hero h1 {
+  margin: 0 0 0.5rem;
+  color: var(--accent-dark);
+}
+
+.hero__subtitle {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text);
 }
 
 p, li, label {
@@ -62,30 +99,40 @@ a:hover {
   background-color: var(--accent);
   color: #FFFFFF;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   font-weight: 600;
   padding: 0.6rem 1.5rem;
+  transition: background-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .stButton > button:hover {
-  background-color: color-mix(in srgb, var(--accent) 85%, black);
+  background-color: var(--accent-dark);
   color: #FFFFFF;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 /* Toy result cards */
 .toy-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 16px;
   padding: 1rem;
   height: 100%;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  box-shadow: 0 2px 8px rgba(43, 43, 43, 0.06);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.toy-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px rgba(43, 43, 43, 0.1);
 }
 
 .toy-card img {
-  border-radius: 8px;
+  border-radius: 10px;
   object-fit: cover;
   aspect-ratio: 1 / 1;
 }
@@ -105,8 +152,41 @@ a:hover {
   margin: 0;
 }
 
+.toy-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.tag--coral {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.tag--teal {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.tag--yellow {
+  background: var(--yellow-soft);
+  color: var(--yellow-dark);
+}
+
 .toy-card__link {
   margin-top: auto;
+  padding-top: 0.25rem;
 }
 
 .toy-card__link a {
@@ -114,14 +194,15 @@ a:hover {
   text-align: center;
   background-color: var(--accent);
   color: #FFFFFF !important;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 0.5rem 1rem;
   font-weight: 600;
   font-size: 0.9rem;
+  transition: background-color 0.15s ease;
 }
 
 .toy-card__link a:hover {
-  background-color: color-mix(in srgb, var(--accent) 85%, black);
+  background-color: var(--accent-dark);
   text-decoration: none;
 }
 

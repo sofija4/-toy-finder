@@ -1,6 +1,7 @@
 import base64
 import os
 import pathlib
+import re
 
 import requests
 import streamlit as st
@@ -96,34 +97,87 @@ def within_budget(item, budget):
     return price <= budget
 
 
-def match_score(item, answers):
-    """Rank by how many of the child's interests/goal/preferences appear in the title.
-    Budget is the only hard filter; these fields aren't structured data in the API
-    response, so relevance is expressed as a ranking rather than an exclusion.
+# A toy's title is the only free-text field SerpAPI reliably fills in (snippet/tag/
+# extensions are mostly promo noise like "25% OFF"), so every match reason below is
+# a real substring/regex check against the title — never a guess about the product.
+AGE_RANGE_PREFIXED_RE = re.compile(r"ages?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})", re.I)
+AGE_RANGE_UNIT_RE = re.compile(r"(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\s*(?:years?|yrs?)\b", re.I)
+AGE_PLUS_RE = re.compile(r"ages?\s*(\d{1,2})\s*\+", re.I)
+
+
+def _age_fits_title(title, age):
+    for pattern in (AGE_RANGE_PREFIXED_RE, AGE_RANGE_UNIT_RE):
+        match = pattern.search(title)
+        if match:
+            lo, hi = int(match.group(1)), int(match.group(2))
+            return lo <= age <= hi
+    match = AGE_PLUS_RE.search(title)
+    if match:
+        return age >= int(match.group(1))
+    return False  # no age info in the title at all — can't claim a fit either way
+
+
+def match_reasons(item, answers):
+    """Every reason here is a verified fact about this specific item, grouped into
+    the 3-color tag palette: coral = matches what the child likes/needs to learn,
+    teal = practical fit (budget/age/accessibility), yellow = stated preferences.
     """
     title = item.get("title", "").lower()
-    keywords = [*answers["interests"], answers["goal"], *answers["preferences"]]
-    return sum(1 for k in keywords if k and k.lower() in title)
+    reasons = []
+
+    if item.get("extracted_price") is not None:
+        reasons.append({"label": "In budget", "group": "teal"})
+
+    if _age_fits_title(title, answers["age"]):
+        reasons.append({"label": "Age-appropriate", "group": "teal"})
+
+    if any(DISABILITY_SEARCH_TERMS[d].lower() in title for d in answers["disabilities"] if d in DISABILITY_SEARCH_TERMS):
+        reasons.append({"label": "Accessibility-aware", "group": "teal"})
+
+    if answers["goal"] and answers["goal"].lower() in title:
+        reasons.append({"label": f"{answers['goal']} goal", "group": "coral"})
+
+    for interest in answers["interests"]:
+        if interest.lower() in title:
+            reasons.append({"label": f'Matches "{interest}"', "group": "coral"})
+
+    attention_term = ATTENTION_SEARCH_TERMS.get(answers["attention"])
+    if attention_term and attention_term.lower() in title:
+        reasons.append({"label": "Attention-span fit", "group": "yellow"})
+
+    play_style_term = PLAY_STYLE_SEARCH_TERMS.get(answers["play_style"])
+    if play_style_term and play_style_term.lower() in title:
+        reasons.append({"label": "Play-style fit", "group": "yellow"})
+
+    for preference in answers["preferences"]:
+        if preference.lower() in title:
+            reasons.append({"label": preference, "group": "yellow"})
+
+    return reasons
 
 
 def rank_results(results, answers):
     in_budget = [item for item in results if within_budget(item, answers["budget"])]
-    in_budget.sort(
-        key=lambda item: (
-            -match_score(item, answers),
-            item.get("extracted_price") if item.get("extracted_price") is not None else float("inf"),
+    scored = [(item, match_reasons(item, answers)) for item in in_budget]
+    scored.sort(
+        key=lambda pair: (
+            -len(pair[1]),
+            pair[0].get("extracted_price") if pair[0].get("extracted_price") is not None else float("inf"),
         )
     )
-    return in_budget
+    return scored
 
 
-def render_toy_card(column, toy):
+def render_toy_card(column, toy, reasons):
     column.markdown("<div class='toy-card'>", unsafe_allow_html=True)
     column.image(toy.get("thumbnail") or PLACEHOLDER_IMAGE, use_container_width=True)
     title = toy.get("title", "Untitled toy")
     column.markdown(f"<p class='toy-card__title'>{title}</p>", unsafe_allow_html=True)
     price_text = toy.get("price") or "Price unavailable"
     column.markdown(f"<p class='toy-card__price'>{price_text}</p>", unsafe_allow_html=True)
+    if reasons:
+        tags_html = "".join(f"<span class='tag tag--{r['group']}'>{r['label']}</span>" for r in reasons)
+        column.markdown(f"<div class='toy-card__tags'>{tags_html}</div>", unsafe_allow_html=True)
     link = toy.get("product_link")
     if link:
         column.markdown(
@@ -141,16 +195,21 @@ def render_results(results, answers):
 
     st.markdown("### Your toy matches")
     grid = st.columns(4)
-    for i, toy in enumerate(ranked):
-        render_toy_card(grid[i % 4], toy)
+    for i, (toy, reasons) in enumerate(ranked):
+        render_toy_card(grid[i % 4], toy, reasons)
 
 
 def main():
     st.set_page_config(page_title="Toy Finder", layout="wide")
     load_local_css()
 
-    st.title("Toy Finder")
-    st.caption("Answer a few questions and we'll find toys that fit.")
+    st.markdown(
+        "<div class='hero'>"
+        "<h1>Toy Finder</h1>"
+        "<p class='hero__subtitle'>Answer a few questions and we'll match your child with toys they'll love.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     api_key = get_serpapi_key()
     if not api_key:
