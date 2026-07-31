@@ -1,24 +1,26 @@
 /* style.css — theme layer on top of .streamlit/config.toml.
-   Palette: coral is the one primary accent (also set as primaryColor in config.toml);
-   teal and yellow are supporting colors used only for tags, kept soft/pastel so they
-   read as warm and playful rather than a rainbow of competing colors. */
+   Palette: coral is the primary accent (buttons/links/slider — also primaryColor
+   in config.toml). Teal, yellow, and pink are saturated supporting colors used in
+   the hero gradient and the results-heading accent bar — kept fully saturated on
+   purpose, not tinted pastel, for a confident/playful kids'-product look. Cards
+   themselves stay neutral (white/near-white) so the palette pops against them
+   instead of competing with it. */
 
 @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@600;700&display=swap');
 
 :root {
-  /* Each palette color is defined once; -dark/-soft shades are derived from it,
-     so re-theming a color only ever means editing this one base line. */
-  --accent: #E8674C;
+  /* Each palette color is defined once; -dark shades are derived from it, so
+     re-theming a color only ever means editing this one base line. */
+  --accent: #FF5A36;
   --accent-dark: color-mix(in srgb, var(--accent) 78%, black);
-  --accent-soft: color-mix(in srgb, var(--accent) 12%, white);
 
-  --teal: #4FA8A0;
+  --teal: #17B0A6;
   --teal-dark: color-mix(in srgb, var(--teal) 70%, black);
-  --teal-soft: color-mix(in srgb, var(--teal) 14%, white);
 
-  --yellow: #F2B84B;
+  --yellow: #FFC42E;
   --yellow-dark: color-mix(in srgb, var(--yellow) 55%, black);
-  --yellow-soft: color-mix(in srgb, var(--yellow) 18%, white);
+
+  --pink: #FF4D8D;
 
   --text: #2B2B2B;
   --text-muted: #6B6B6B;
@@ -53,23 +55,39 @@ h1 {
   margin-bottom: 0.25rem;
 }
 
-/* Hero */
+/* Hero — bold and saturated on purpose, so it reads as confident/energetic
+   rather than a faint colored wash. */
 .hero {
-  background: linear-gradient(120deg, var(--accent-soft) 0%, var(--teal-soft) 100%);
+  background: linear-gradient(120deg, var(--accent) 0%, var(--pink) 55%, var(--teal) 100%);
   border-radius: 20px;
   padding: 2.25rem 2.5rem;
   margin-bottom: 2rem;
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .hero h1 {
   margin: 0 0 0.5rem;
-  color: var(--accent-dark);
+  color: #FFFFFF;
 }
 
 .hero__subtitle {
   margin: 0;
   font-size: 1.05rem;
-  color: var(--text);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* Small multi-color signature accent under the results heading — ties the
+   whole palette together in one tasteful, non-chip touch. */
+.results-heading {
+  margin-bottom: 0;
+}
+
+.accent-bar {
+  width: 72px;
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--pink), var(--yellow), var(--teal));
+  margin: 0.5rem 0 1.5rem;
 }
 
 p, li, label {
@@ -112,7 +130,8 @@ a:hover {
   box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-/* Toy result cards */
+/* Toy result cards — kept neutral so the vibrant palette lives in the hero/
+   accent bar/buttons rather than on the cards themselves. */
 .toy-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -122,16 +141,18 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  box-shadow: 0 2px 8px rgba(43, 43, 43, 0.06);
+  box-shadow: 0 2px 6px rgba(43, 43, 43, 0.05), 0 1px 3px color-mix(in srgb, var(--teal) 12%, transparent);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .toy-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 12px 24px rgba(43, 43, 43, 0.1);
+  transform: translateY(-4px);
+  box-shadow: 0 16px 28px rgba(43, 43, 43, 0.1), 0 6px 14px color-mix(in srgb, var(--teal) 25%, transparent);
 }
 
-.toy-card img {
+.toy-card__image {
+  display: block;
+  width: 100%;
   border-radius: 10px;
   object-fit: cover;
   aspect-ratio: 1 / 1;
@@ -152,45 +173,9 @@ a:hover {
   margin: 0;
 }
 
-.toy-card__tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.tag {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 0.22rem 0.6rem;
-  border-radius: 999px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
-.tag--coral {
-  background: var(--accent-soft);
-  color: var(--accent-dark);
-}
-
-.tag--teal {
-  background: var(--teal-soft);
-  color: var(--teal-dark);
-}
-
-.tag--yellow {
-  background: var(--yellow-soft);
-  color: var(--yellow-dark);
-}
-
-.toy-card__link {
-  margin-top: auto;
-  padding-top: 0.25rem;
-}
-
-.toy-card__link a {
+a.toy-card__link {
   display: block;
+  margin-top: auto;
   text-align: center;
   background-color: var(--accent);
   color: #FFFFFF !important;
@@ -198,12 +183,13 @@ a:hover {
   padding: 0.5rem 1rem;
   font-weight: 600;
   font-size: 0.9rem;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, transform 0.15s ease;
 }
 
-.toy-card__link a:hover {
+a.toy-card__link:hover {
   background-color: var(--accent-dark);
   text-decoration: none;
+  transform: translateY(-1px);
 }
 
 .app-footer {

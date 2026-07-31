@@ -1,4 +1,5 @@
 import base64
+import html
 import os
 import pathlib
 import re
@@ -118,40 +119,40 @@ def _age_fits_title(title, age):
 
 
 def match_reasons(item, answers):
-    """Every reason here is a verified fact about this specific item, grouped into
-    the 3-color tag palette: coral = matches what the child likes/needs to learn,
-    teal = practical fit (budget/age/accessibility), yellow = stated preferences.
+    """How many of the child's stated criteria this item genuinely satisfies,
+    checked against its title (never fabricated). Used only to rank results —
+    not displayed on the cards.
     """
     title = item.get("title", "").lower()
     reasons = []
 
     if item.get("extracted_price") is not None:
-        reasons.append({"label": "In budget", "group": "teal"})
+        reasons.append("in_budget")
 
     if _age_fits_title(title, answers["age"]):
-        reasons.append({"label": "Age-appropriate", "group": "teal"})
+        reasons.append("age_fit")
 
     if any(DISABILITY_SEARCH_TERMS[d].lower() in title for d in answers["disabilities"] if d in DISABILITY_SEARCH_TERMS):
-        reasons.append({"label": "Accessibility-aware", "group": "teal"})
+        reasons.append("accessibility")
 
     if answers["goal"] and answers["goal"].lower() in title:
-        reasons.append({"label": f"{answers['goal']} goal", "group": "coral"})
+        reasons.append("goal")
 
     for interest in answers["interests"]:
         if interest.lower() in title:
-            reasons.append({"label": f'Matches "{interest}"', "group": "coral"})
+            reasons.append(f"interest:{interest}")
 
     attention_term = ATTENTION_SEARCH_TERMS.get(answers["attention"])
     if attention_term and attention_term.lower() in title:
-        reasons.append({"label": "Attention-span fit", "group": "yellow"})
+        reasons.append("attention")
 
     play_style_term = PLAY_STYLE_SEARCH_TERMS.get(answers["play_style"])
     if play_style_term and play_style_term.lower() in title:
-        reasons.append({"label": "Play-style fit", "group": "yellow"})
+        reasons.append("play_style")
 
     for preference in answers["preferences"]:
         if preference.lower() in title:
-            reasons.append({"label": preference, "group": "yellow"})
+            reasons.append(f"preference:{preference}")
 
     return reasons
 
@@ -165,26 +166,32 @@ def rank_results(results, answers):
             pair[0].get("extracted_price") if pair[0].get("extracted_price") is not None else float("inf"),
         )
     )
-    return scored
+    return [item for item, _reasons in scored]
 
 
-def render_toy_card(column, toy, reasons):
-    column.markdown("<div class='toy-card'>", unsafe_allow_html=True)
-    column.image(toy.get("thumbnail") or PLACEHOLDER_IMAGE, use_container_width=True)
-    title = toy.get("title", "Untitled toy")
-    column.markdown(f"<p class='toy-card__title'>{title}</p>", unsafe_allow_html=True)
-    price_text = toy.get("price") or "Price unavailable"
-    column.markdown(f"<p class='toy-card__price'>{price_text}</p>", unsafe_allow_html=True)
-    if reasons:
-        tags_html = "".join(f"<span class='tag tag--{r['group']}'>{r['label']}</span>" for r in reasons)
-        column.markdown(f"<div class='toy-card__tags'>{tags_html}</div>", unsafe_allow_html=True)
+def render_toy_card(column, toy):
+    # Built as one HTML block deliberately: separate st.markdown/st.image calls
+    # each get wrapped in their own Streamlit container, so an opening <div> in
+    # one markdown call never actually wraps a later st.image call — it just
+    # renders as its own empty styled box. One block avoids that entirely, and
+    # a plain <img> avoids Streamlit's built-in image hover/fullscreen toolbar.
+    title = html.escape(toy.get("title", "Untitled toy"))
+    price_text = html.escape(toy.get("price") or "Price unavailable")
+    image_src = html.escape(toy.get("thumbnail") or PLACEHOLDER_IMAGE)
     link = toy.get("product_link")
-    if link:
-        column.markdown(
-            f"<div class='toy-card__link'><a href='{link}' target='_blank' rel='noopener'>View toy</a></div>",
-            unsafe_allow_html=True,
-        )
-    column.markdown("</div>", unsafe_allow_html=True)
+    link_html = (
+        f"<a class='toy-card__link' href='{html.escape(link)}' target='_blank' rel='noopener'>View toy</a>"
+        if link else ""
+    )
+    column.markdown(
+        f"<div class='toy-card'>"
+        f"<img class='toy-card__image' src='{image_src}' alt='{title}'>"
+        f"<p class='toy-card__title'>{title}</p>"
+        f"<p class='toy-card__price'>{price_text}</p>"
+        f"{link_html}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_results(results, answers):
@@ -193,10 +200,10 @@ def render_results(results, answers):
         st.info("No toys matched your filters. Try raising your budget or loosening your interests.")
         return
 
-    st.markdown("### Your toy matches")
+    st.markdown("<h3 class='results-heading'>Your toy matches</h3><div class='accent-bar'></div>", unsafe_allow_html=True)
     grid = st.columns(4)
-    for i, (toy, reasons) in enumerate(ranked):
-        render_toy_card(grid[i % 4], toy, reasons)
+    for i, toy in enumerate(ranked):
+        render_toy_card(grid[i % 4], toy)
 
 
 def main():

@@ -1,6 +1,6 @@
 [theme]
 # The one accent color for the whole app. Change this single line to re-theme.
-primaryColor = "#E8674C"
+primaryColor = "#FF5A36"
 
 backgroundColor = "#FAFAF8"
 secondaryBackgroundColor = "#F1F0ED"
