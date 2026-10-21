@@ -1,10 +1,39 @@
-# Toy Finder
+# Inclusive Toy Finder
 
-A Streamlit app that recommends toys based on a child's age, attention span,
-goals, interests, budget, and other preferences, using live product data from
-Google Shopping (via SerpAPI).
+A Streamlit app that suggests toys based on a child's age, budget, interests,
+developmental goals, and sensory and accessibility needs, then finds live
+listings on Google Shopping (via SerpAPI).
 
 Live demo: https://toyrecommender.streamlit.app/
+
+## How it works
+
+1. **Screening.** Each of the 84 toy types in `catalog.py` is tagged with an age
+   range, typical price, noise level, flashing lights, small parts, how much hand
+   control and mobility it takes, and whether it depends on sight or hearing. A toy
+   that conflicts with the child's profile is removed by a hard rule, so a toy with
+   flashing lights never reaches a light-sensitive child.
+2. **Ranking.** Remaining toys are scored on matched interests and goals plus
+   need-specific fit (easy-grip pieces, touch-friendly toys). Every interest and goal
+   the parent picks is represented when a toy fits it, and each result explains why
+   it was chosen.
+3. **Live listings.** For the top picks, the app queries Google Shopping in parallel,
+   caches results, and rechecks every listing's title and price against the same
+   rules (budget, age labels, light-up or electronic features, unsafe items like
+   water beads) before showing the best-rated one.
+4. **Plain-language intake (optional).** With an Anthropic API key, parents can
+   describe their child in a sentence. Claude converts it into the form's filters,
+   which stay visible and editable. The rules above still decide what's shown.
+
+## Project structure
+
+| File | Purpose |
+| --- | --- |
+| `toys.py` | Streamlit interface |
+| `recommender.py` | Screening, ranking, and listing checks (no UI or network code) |
+| `catalog.py` | Toy types, their attributes, and form options |
+| `services.py` | SerpAPI and Claude API calls |
+| `test_recommender.py` | Unit tests, including an exhaustive check that no pick breaks a hard rule |
 
 ## Setup
 
@@ -14,18 +43,23 @@ source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Add your SerpAPI key (get one at https://serpapi.com/) to
-`.streamlit/secrets.toml`:
+Add your keys to `.streamlit/secrets.toml` (gitignored, never commit it):
 
 ```toml
-SERPAPI_KEY = "your-key-here"
+SERPAPI_KEY = "your-serpapi-key"
+ANTHROPIC_API_KEY = "your-anthropic-key"   # optional: enables the describe-your-child box
 ```
 
-This file is gitignored and must never be committed. On Streamlit Community
-Cloud, set `SERPAPI_KEY` in the app's **Settings → Secrets** instead.
+On Streamlit Community Cloud, set these in the app's **Settings → Secrets** instead.
 
 ## Run
 
 ```bash
 streamlit run toys.py
+```
+
+## Test
+
+```bash
+python -m unittest -v
 ```

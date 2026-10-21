@@ -1,261 +1,365 @@
-import base64
-import html
-import os
-import pathlib
-import re
+"""Inclusive Toy Finder: the Streamlit app.
 
-import requests
+This file is only the interface. The rules live in recommender.py, the toy
+data in catalog.py, and the calls to SerpAPI and Claude in services.py.
+
+Run with:  streamlit run toys.py
+"""
+from __future__ import annotations
+
+import logging
+import os
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote_plus
+
 import streamlit as st
 
-PLACEHOLDER_IMAGE = (
-    "data:image/svg+xml;base64,"
-    + base64.b64encode(
-        b"<svg xmlns='http://www.w3.org/2000/svg' width='400' height='400'>"
-        b"<rect width='100%' height='100%' fill='#F1F0ED'/>"
-        b"<text x='50%' y='50%' font-family='sans-serif' font-size='18' "
-        b"fill='#9A9A9A' text-anchor='middle' dy='.3em'>No image</text></svg>"
-    ).decode()
-)
+import services
+from catalog import (ATTENTION, BUDGETS, CATALOG, EXAMPLES, GOALS, INTERESTS, NEEDS,
+                     PLAY_SETTINGS)
+from recommender import (ADJUSTMENT_TIPS, EXCLUSION_LABELS, Profile, clean_ai_filters,
+                         pick_listing, recommend)
 
-# Raw UI labels aren't useful shopping-search keywords on their own (e.g. "5-10 minutes"
-# matches nothing in a product title), so translate them into terms that actually
-# describe the kind of toy being searched for.
-ATTENTION_SEARCH_TERMS = {
-    "Under 5 minutes": "quick play",
-    "5–10 minutes": "short session play",
-    "10–20 minutes": "engaging play",
-    "20+ minutes": "long immersive play",
-}
-DISABILITY_SEARCH_TERMS = {
-    "Colorblindness": "high contrast",
-    "Hearing accessibility": "visual light-up",
-    "Mobility friendly": "easy grip adaptive",
-}
-PLAY_STYLE_SEARCH_TERMS = {
-    "Independently": "solo play",
-    "Socially with friends": "group play",
-}
+st.set_page_config(page_title="Inclusive Toy Finder", page_icon="🧸", layout="centered")
+log = logging.getLogger("toy_finder")
 
-QUESTIONS = [
-    {"label": "How old is the child?", "type": "slider", "key": "age",
-     "args": {"min_value": 0, "max_value": 18, "value": 5}},
-    {"label": "Attention span?", "type": "selectbox", "key": "attention",
-     "options": ["Under 5 minutes", "5–10 minutes", "10–20 minutes", "20+ minutes"]},
-    {"label": "Special disabilities (if any):", "type": "multiselect", "key": "disabilities",
-     "options": ["Colorblindness", "Hearing accessibility", "Mobility friendly", "Other"]},
-    {"label": "Goals for child:", "type": "selectbox", "key": "goal",
-     "options": ["STEM", "Sensory and multisensory development", "Imaginative and creative thinking",
-                 "Motor skills and physical coordination", "Tech and electrical exploration",
-                 "Educational and cognitive growth"]},
-    {"label": "Child's interests (pick one or more):", "type": "multiselect", "key": "interests",
-     "options": ["Animals", "Vehicles", "Fantasy", "Science", "Art & Crafts"]},
-    {"label": "Parent's budget (USD):", "type": "number_input", "key": "budget",
-     "args": {"min_value": 0.0, "value": 50.0, "step": 1.0}},
-    {"label": "Play style?", "type": "radio", "key": "play_style",
-     "options": ["Independently", "Socially with friends"]},
-    {"label": "Additional preferences:", "type": "multiselect", "key": "preferences",
-     "options": ["Travel safe", "Compact storage", "Low mess level", "Washable",
-                 "Indestructible", "No assembly required", "Culturally inclusive"]},
-]
+RESULTS_TO_SHOW = 6
+LISTING_CACHE_SECONDS = 12 * 60 * 60  # reuse shopping results for 12 hours to save API quota
 
 
-def load_local_css():
-    css_path = pathlib.Path(__file__).parent / "cs" / "style.css"
-    if css_path.exists():
-        st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+def get_secret(name: str):
+    try:
+        value = st.secrets.get(name)
+    except Exception:  # no secrets.toml, e.g. a fresh clone
+        value = None
+    return value or os.environ.get(name) or None
 
 
-def get_serpapi_key():
-    key = st.secrets.get("SERPAPI_KEY") if hasattr(st, "secrets") else None
-    return key or os.environ.get("SERPAPI_KEY")
+SERPAPI_KEY = get_secret("SERPAPI_KEY")
+ANTHROPIC_KEY = get_secret("ANTHROPIC_API_KEY")
+CLAUDE_MODEL = get_secret("CLAUDE_MODEL") or services.DEFAULT_CLAUDE_MODEL
+
+# ---------------------------------------------------------------------------
+# Form state
+# ---------------------------------------------------------------------------
+
+DEFAULT_VALUES = {"age": 4, "budget": 40, "interests": [], "goals": [],
+                  "attention": "medium", "setting": "either"}
 
 
-def build_search_query(answers):
-    parts = [
-        f"{answers['age']}-year-old toy",
-        ATTENTION_SEARCH_TERMS.get(answers["attention"]),
-        answers["goal"],
-        ", ".join(answers["interests"]) if answers["interests"] else None,
-        ", ".join(DISABILITY_SEARCH_TERMS[d] for d in answers["disabilities"] if d in DISABILITY_SEARCH_TERMS) or None,
-        PLAY_STYLE_SEARCH_TERMS.get(answers["play_style"]),
-        ", ".join(answers["preferences"]) if answers["preferences"] else None,
-        f"under ${int(answers['budget'])}",
-    ]
-    return " ".join(p for p in parts if p).strip()
+def init_state() -> None:
+    for key, value in DEFAULT_VALUES.items():
+        st.session_state.setdefault(key, value)
+    for need in NEEDS:
+        st.session_state.setdefault(f"need_{need}", False)
 
 
-def fetch_shopping_results(query, api_key):
-    params = {"engine": "google", "q": query, "tbm": "shop", "api_key": api_key}
-    response = requests.get("https://serpapi.com/search", params=params, timeout=15)
-    response.raise_for_status()
-    return response.json().get("shopping_results", [])
+def apply_values(values: dict, needs) -> None:
+    for key, value in values.items():
+        st.session_state[key] = value
+    for need in NEEDS:
+        st.session_state[f"need_{need}"] = need in needs
 
 
-def within_budget(item, budget):
-    price = item.get("extracted_price")
-    if price is None:
-        return True  # unknown price is shown, not assumed over budget
-    return price <= budget
+def profile_from_state() -> Profile:
+    state = st.session_state
+    return Profile(
+        age=state["age"], budget=state["budget"],
+        interests=tuple(state["interests"]), goals=tuple(state["goals"]),
+        attention=state["attention"], play_setting=state["setting"],
+        needs=tuple(need for need in NEEDS if state[f"need_{need}"]),
+    )
 
 
-# A toy's title is the only free-text field SerpAPI reliably fills in (snippet/tag/
-# extensions are mostly promo noise like "25% OFF"), so every match reason below is
-# a real substring/regex check against the title — never a guess about the product.
-AGE_RANGE_PREFIXED_RE = re.compile(r"ages?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})", re.I)
-AGE_RANGE_UNIT_RE = re.compile(r"(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\s*(?:years?|yrs?)\b", re.I)
-AGE_PLUS_RE = re.compile(r"ages?\s*(\d{1,2})\s*\+", re.I)
+def load_example(index: int) -> None:
+    example = EXAMPLES[index]
+    apply_values({**DEFAULT_VALUES, **example["values"]}, example["needs"])
+    st.session_state["profile"] = profile_from_state()
 
 
-def _age_fits_title(title, age):
-    for pattern in (AGE_RANGE_PREFIXED_RE, AGE_RANGE_UNIT_RE):
-        match = pattern.search(title)
-        if match:
-            lo, hi = int(match.group(1)), int(match.group(2))
-            return lo <= age <= hi
-    match = AGE_PLUS_RE.search(title)
-    if match:
-        return age >= int(match.group(1))
-    return False  # no age info in the title at all — can't claim a fit either way
+# ---------------------------------------------------------------------------
+# Live listings
+# ---------------------------------------------------------------------------
+
+@st.cache_resource
+def _listing_cache() -> dict:
+    """Shared across sessions: query -> (time fetched, listings)."""
+    return {}
 
 
-def match_reasons(item, answers):
-    """How many of the child's stated criteria this item genuinely satisfies,
-    checked against its title (never fabricated). Used only to rank results —
-    not displayed on the cards.
-    """
-    title = item.get("title", "").lower()
-    reasons = []
+def fetch_listings(queries):
+    """Return ({query: listings or None}, problem message or None)."""
+    if not SERPAPI_KEY:
+        return {}, ("Live prices are off because no SerpAPI key is set, so each card "
+                    "links to a Google Shopping search instead.")
+    cache, now = _listing_cache(), time.time()
+    found, missing = {}, []
+    for query in queries:
+        entry = cache.get(query)
+        if entry and now - entry[0] < LISTING_CACHE_SECONDS:
+            found[query] = entry[1]
+        else:
+            missing.append(query)
 
-    if item.get("extracted_price") is not None:
-        reasons.append("in_budget")
-
-    if _age_fits_title(title, answers["age"]):
-        reasons.append("age_fit")
-
-    if any(DISABILITY_SEARCH_TERMS[d].lower() in title for d in answers["disabilities"] if d in DISABILITY_SEARCH_TERMS):
-        reasons.append("accessibility")
-
-    if answers["goal"] and answers["goal"].lower() in title:
-        reasons.append("goal")
-
-    for interest in answers["interests"]:
-        if interest.lower() in title:
-            reasons.append(f"interest:{interest}")
-
-    attention_term = ATTENTION_SEARCH_TERMS.get(answers["attention"])
-    if attention_term and attention_term.lower() in title:
-        reasons.append("attention")
-
-    play_style_term = PLAY_STYLE_SEARCH_TERMS.get(answers["play_style"])
-    if play_style_term and play_style_term.lower() in title:
-        reasons.append("play_style")
-
-    for preference in answers["preferences"]:
-        if preference.lower() in title:
-            reasons.append(f"preference:{preference}")
-
-    return reasons
+    failed = False
+    if missing:
+        with st.spinner("Checking live prices..."):
+            with ThreadPoolExecutor(max_workers=len(missing)) as pool:
+                futures = {q: pool.submit(services.search_shopping, q, SERPAPI_KEY)
+                           for q in missing}
+            for query, future in futures.items():
+                try:
+                    listings = future.result()
+                except Exception as exc:  # ServiceError or anything unexpected
+                    log.warning("Shopping search failed for %r: %s", query, exc)
+                    failed = True
+                    found[query] = None
+                    continue
+                cache[query] = (now, listings)
+                found[query] = listings
+    problem = ("Live prices aren't available right now, so some cards link to a Google "
+               "Shopping search instead.") if failed else None
+    return found, problem
 
 
-def rank_results(results, answers):
-    in_budget = [item for item in results if within_budget(item, answers["budget"])]
-    scored = [(item, match_reasons(item, answers)) for item in in_budget]
-    scored.sort(
-        key=lambda pair: (
-            -len(pair[1]),
-            pair[0].get("extracted_price") if pair[0].get("extracted_price") is not None else float("inf"),
+# ---------------------------------------------------------------------------
+# Formatting helpers. Streamlit renders Markdown, so "$" and symbols need escaping.
+# ---------------------------------------------------------------------------
+
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|$<>~])")
+
+
+def md(text: str) -> str:
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", text)
+
+
+def money(amount: float) -> str:
+    text = f"{amount:,.0f}" if float(amount).is_integer() else f"{amount:,.2f}"
+    return "\\$" + text
+
+
+def age_label(age: int) -> str:
+    return "Under 1" if age == 0 else f"{age} year{'s' if age > 1 else ''}"
+
+
+def age_phrase(age: int) -> str:
+    return "a baby under 1" if age == 0 else f"a {age}-year-old"
+
+
+def age_range(toy) -> str:
+    if toy.min_age == 0:
+        return f"babies up to age {toy.max_age}"
+    return f"ages {toy.min_age} to {toy.max_age}"
+
+
+def shopping_search_url(query: str) -> str:
+    return f"https://www.google.com/search?tbm=shop&q={quote_plus(query)}"
+
+
+def shorten(text: str, limit: int = 90) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+# ---------------------------------------------------------------------------
+# Page sections
+# ---------------------------------------------------------------------------
+
+def render_intro() -> None:
+    st.title("Inclusive Toy Finder", anchor=False)
+    st.write("Toy ideas matched to a child's age, interests, and sensory and "
+             "accessibility needs, with live prices from online stores.")
+    st.caption("New here? Try an example:")
+    columns = st.columns(2)
+    for index, example in enumerate(EXAMPLES):
+        columns[index % 2].button(example["label"], key=f"example_{index}",
+                                  on_click=load_example, args=(index,))
+
+
+def render_describe() -> None:
+    """Optional: describe the child in plain words and let Claude fill in the form."""
+    if not ANTHROPIC_KEY:
+        return
+    with st.form("describe"):
+        st.markdown("**Or describe your child in your own words**")
+        st.text_area(
+            "Description", key="description", max_chars=600, label_visibility="collapsed",
+            placeholder="For example: My son is 4. He loves trains, covers his ears at loud "
+                        "noises, and usually plays on his own for a few minutes at a time.",
         )
-    )
-    return [item for item, _reasons in scored]
+        st.caption("Claude turns this into the filters below and runs the search. Check "
+                   "what it picked and change anything that's off. This app doesn't save "
+                   "what you type.")
+        submitted = st.form_submit_button("Fill in the filters")
+    if not submitted:
+        return
+    text = (st.session_state.get("description") or "").strip()
+    if len(text) < 10:
+        st.warning("Add a sentence or two about the child first.")
+        return
+    with st.spinner("Reading your description..."):
+        try:
+            raw = services.describe_to_filters(text, ANTHROPIC_KEY, CLAUDE_MODEL)
+        except services.ServiceError as exc:
+            log.warning("Claude intake failed: %s", exc)
+            st.error("Couldn't read that description right now. Use the filters below instead.")
+            return
+    values, needs, summary = clean_ai_filters(raw)
+    apply_values({**DEFAULT_VALUES, **values}, needs)
+    st.session_state["profile"] = profile_from_state()
+    st.success((md(summary) + " " if summary else "") +
+               "The filters below are filled in. Adjust anything and select Find toys again.")
 
 
-def render_toy_card(column, toy):
-    # Built as one HTML block deliberately: separate st.markdown/st.image calls
-    # each get wrapped in their own Streamlit container, so an opening <div> in
-    # one markdown call never actually wraps a later st.image call — it just
-    # renders as its own empty styled box. One block avoids that entirely, and
-    # a plain <img> avoids Streamlit's built-in image hover/fullscreen toolbar.
-    title = html.escape(toy.get("title", "Untitled toy"))
-    price_text = html.escape(toy.get("price") or "Price unavailable")
-    image_src = html.escape(toy.get("thumbnail") or PLACEHOLDER_IMAGE)
-    link = toy.get("product_link")
-    link_html = (
-        f"<a class='toy-card__link' href='{html.escape(link)}' target='_blank' rel='noopener'>View toy</a>"
-        if link else ""
-    )
-    column.markdown(
-        f"<div class='toy-card'>"
-        f"<img class='toy-card__image' src='{image_src}' alt='{title}'>"
-        f"<p class='toy-card__title'>{title}</p>"
-        f"<p class='toy-card__price'>{price_text}</p>"
-        f"{link_html}"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+def render_filters() -> None:
+    with st.form("filters"):
+        left, right = st.columns(2)
+        left.select_slider("Child's age", options=list(range(13)), key="age",
+                           format_func=age_label)
+        right.select_slider("Budget", options=list(BUDGETS), key="budget",
+                            format_func=lambda amount: f"Up to ${amount}")
+        st.multiselect("Interests", options=list(INTERESTS), key="interests",
+                       format_func=INTERESTS.get, placeholder="Pick any that fit")
+        st.multiselect("Goals to support", options=list(GOALS), key="goals",
+                       format_func=GOALS.get, placeholder="Pick any that fit")
+        left, right = st.columns(2)
+        left.radio("How long do they usually stay with one activity?",
+                   options=list(ATTENTION), key="attention", format_func=ATTENTION.get)
+        right.radio("How do they usually play?", options=list(PLAY_SETTINGS), key="setting",
+                    format_func=PLAY_SETTINGS.get)
+        st.markdown("**Sensory and accessibility needs**")
+        st.caption("Check any that apply. Toys that conflict with a checked need are "
+                   "removed, not just ranked lower.")
+        left, right = st.columns(2)
+        for index, (need, label) in enumerate(NEEDS.items()):
+            (left if index % 2 == 0 else right).checkbox(label, key=f"need_{need}")
+        submitted = st.form_submit_button("Find toys", type="primary")
+    if submitted:
+        st.session_state["profile"] = profile_from_state()
 
 
-def render_results(results, answers):
-    ranked = rank_results(results, answers)
-    if not ranked:
-        st.info("No toys matched your filters. Try raising your budget or loosening your interests.")
+def render_results(profile: Profile) -> None:
+    results = recommend(profile, limit=RESULTS_TO_SHOW)
+    st.header(f"Top picks for {age_phrase(profile.age)}", anchor=False)
+
+    if not results.picks:
+        st.warning("No toy types passed all of these filters.")
+        render_adjustment_tip(results)
+        render_exclusions(results)
         return
 
-    st.markdown("<h3 class='results-heading'>Your toy matches</h3><div class='accent-bar'></div>", unsafe_allow_html=True)
-    grid = st.columns(4)
-    for i, toy in enumerate(ranked):
-        render_toy_card(grid[i % 4], toy)
+    count = len(results.picks)
+    st.write(f"{results.eligible} of {results.screened} toy types passed every filter. "
+             + ("Here's the best match." if count == 1 else f"Here are the {count} best matches."))
+    if results.eligible < 3:
+        render_adjustment_tip(results)
+    render_exclusions(results)
+
+    listings, problem = fetch_listings([rec.toy.query for rec in results.picks])
+    if problem:
+        st.info(problem)
+    for rec in results.picks:
+        fetched = listings.get(rec.toy.query)
+        best, passed = pick_listing(fetched, rec.toy, profile)
+        render_card(rec, best, passed, fetched is not None)
 
 
-def main():
-    st.set_page_config(page_title="Toy Finder", layout="wide")
-    load_local_css()
+def render_adjustment_tip(results) -> None:
+    adjustable = [(reason, n) for reason, n in results.excluded.most_common()
+                  if reason in ADJUSTMENT_TIPS]
+    if adjustable:
+        reason, count = adjustable[0]
+        st.info(ADJUSTMENT_TIPS[reason].format(n=count))
 
-    st.markdown(
-        "<div class='hero'>"
-        "<h1>Toy Finder</h1>"
-        "<p class='hero__subtitle'>Answer a few questions and we'll match your child with toys they'll love.</p>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
 
-    api_key = get_serpapi_key()
-    if not api_key:
-        st.error(
-            "No SerpAPI key configured. Add SERPAPI_KEY to .streamlit/secrets.toml "
-            "(local) or your deployment's secrets/environment variables."
+def render_exclusions(results) -> None:
+    if not results.excluded:
+        return
+    with st.expander("Why the other toys were left out"):
+        lines = [f"- {EXCLUSION_LABELS[reason]}: {count}"
+                 for reason, count in results.excluded.most_common()]
+        st.markdown("\n".join(lines))
+
+
+def render_card(rec, listing, passed: int, fetched: bool) -> None:
+    toy = rec.toy
+    with st.container(border=True):
+        if listing and listing.image:
+            image_column, text_column = st.columns([1, 2.6], gap="medium")
+            image_column.image(listing.image)
+        else:
+            text_column = st.container()
+
+        with text_column:
+            st.subheader(md(toy.name), anchor=False)
+            st.write(md(toy.blurb))
+            st.caption(f"Made for {age_range(toy)}. Usually "
+                       f"{money(toy.price_low)} to {money(toy.price_high)}.")
+            st.markdown("**Why it fits**\n\n" + "\n".join(f"- {md(r)}" for r in rec.reasons))
+            if toy.caution:
+                st.caption(f"Good to know: {md(toy.caution)}")
+
+            search_url = shopping_search_url(toy.query)
+            if listing:
+                store = f" at {md(listing.store)}" if listing.store else ""
+                st.markdown(f"**{money(listing.price)}**{store}")
+                details = [md(shorten(listing.title))]
+                if listing.rating:
+                    stars = f"Rated {listing.rating:.1f} out of 5"
+                    if listing.reviews:
+                        stars += f" from {listing.reviews:,} reviews"
+                    details.append(stars)
+                details.append("The only listing that passed the price, age, and safety checks"
+                               if passed == 1 else
+                               f"Top-rated of {passed} listings that passed the price, age, "
+                               "and safety checks")
+                st.caption("  \n".join(details))
+                left, right = st.columns(2)
+                left.link_button("View this product", listing.link)
+                right.link_button("Compare options", search_url)
+            else:
+                if fetched:
+                    st.caption("No listing passed the price, age, and safety checks right now.")
+                st.link_button("Search Google Shopping", search_url)
+
+
+def render_footer() -> None:
+    st.divider()
+    with st.expander("How this works"):
+        st.markdown(
+            f"1. **Screening.** Each of the {len(CATALOG)} toy types in the catalog is tagged "
+            "with an age range, typical price, noise level, flashing lights, small parts, how "
+            "much hand control and mobility it takes, and whether it depends on sight or "
+            "hearing. Any toy that conflicts with your answers is removed by a hard rule, so "
+            "a toy with flashing lights never reaches a child who's sensitive to them.\n"
+            "2. **Ranking.** The remaining toys are scored on the interests and goals they "
+            "match, plus need-specific fit, like easy-grip pieces or toys you can explore by "
+            "touch. Every interest and goal you pick is represented when a toy fits it, and "
+            "each card lists the reasons it was chosen.\n"
+            "3. **Live listings.** For the top picks, the app searches Google Shopping through "
+            "SerpAPI, then rechecks each listing's title and price against your filters "
+            "(budget, age labels, light-up or electronic features, and unsafe items like "
+            "water beads) before showing the best-rated one.\n"
+            "4. **Plain-language search (optional).** You can describe your child in a sentence "
+            "and Claude fills in the filters. The rules above still decide what's shown."
         )
-        st.stop()
-
-    with st.form("preferences_form"):
-        answers = {}
-        cols = st.columns(2)
-        for idx, q in enumerate(QUESTIONS):
-            col = cols[idx % 2]
-            if q["type"] == "slider":
-                answers[q["key"]] = col.slider(q["label"], **q["args"])
-            elif q["type"] == "selectbox":
-                answers[q["key"]] = col.selectbox(q["label"], q["options"], key=q["key"])
-            elif q["type"] == "multiselect":
-                answers[q["key"]] = col.multiselect(q["label"], q["options"], key=q["key"])
-            elif q["type"] == "number_input":
-                answers[q["key"]] = col.number_input(q["label"], **q["args"])
-            elif q["type"] == "radio":
-                answers[q["key"]] = col.radio(q["label"], q["options"], key=q["key"])
-        submitted = st.form_submit_button("Find my toys")
-
-    if submitted:
-        query = build_search_query(answers)
-        with st.spinner("Finding great matches..."):
-            try:
-                results = fetch_shopping_results(query, api_key)
-            except requests.RequestException:
-                st.error("Couldn't reach the toy search service. Please try again in a moment.")
-                return
-        render_results(results, answers)
-
-    st.markdown("---")
-    st.markdown("<p class='app-footer'>© 2026 Toy Finder</p>", unsafe_allow_html=True)
+    st.caption("These are general play ideas, not medical or therapy advice. Always check "
+               "the age label and safety warnings on the product you buy.")
 
 
-if __name__ == "__main__":
-    main()
+# ---------------------------------------------------------------------------
+# Page
+# ---------------------------------------------------------------------------
+
+init_state()
+render_intro()
+render_describe()
+render_filters()
+
+current = st.session_state.get("profile")
+if current:
+    render_results(current)
+else:
+    st.caption("Choose filters and select Find toys, or try an example above.")
+render_footer()
