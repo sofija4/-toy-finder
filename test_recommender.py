@@ -4,8 +4,8 @@ import unittest
 
 from catalog import (ATTENTION, BUDGETS, CATALOG, EXAMPLES, FLAGS, GOALS, HAND_LEVELS,
                      INTERESTS, NEEDS, NOISE_LEVELS, PLAY_SETTINGS)
-from recommender import (Listing, Profile, clean_ai_filters, listing_problem, parse_age_range,
-                         pick_listing, recommend)
+from recommender import (AGE_EDGE_PENALTY, Listing, Profile, clean_ai_filters, guarantees,
+                         listing_problem, parse_age_range, pick_listing, recommend, score)
 from services import extract_json_object
 
 FOCUS = {"short": 0, "medium": 1, "long": 2}
@@ -177,8 +177,19 @@ class RecommendationTests(unittest.TestCase):
     def test_every_pick_explains_itself(self):
         profile = make_profile(age=3, interests=("music",), needs=("sound_sensitive",))
         for rec in recommend(profile).picks:
-            self.assertTrue(rec.reasons)
-            self.assertTrue(any("sound" in r.lower() or "quiet" in r.lower() for r in rec.reasons))
+            self.assertTrue(rec.reasons, rec.toy.id)
+        self.assertIn("has no loud or electronic sounds", guarantees(profile))
+
+    def test_reports_choices_nothing_fits(self):
+        results = recommend(make_profile(age=0, interests=("science", "sensory")))
+        self.assertEqual(results.unmatched_interests, ("science",))
+        self.assertTrue(results.picks)
+
+    def test_toys_aimed_at_younger_kids_rank_lower(self):
+        puppets = TOYS["hand_puppets"]  # ages 2 to 9
+        at_edge = score(puppets, make_profile(age=9, interests=("pretend",)))
+        inside = score(puppets, make_profile(age=8, interests=("pretend",)))
+        self.assertEqual(inside.score - at_edge.score, AGE_EDGE_PENALTY)
 
     def test_exclusions_are_counted(self):
         results = recommend(make_profile(age=2, needs=("mouths_objects",)))

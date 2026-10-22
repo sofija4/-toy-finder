@@ -52,6 +52,8 @@ class Results:
     eligible: int     # toy types that passed every rule
     screened: int     # toy types checked
     excluded: Counter  # reason -> how many toy types it removed
+    unmatched_interests: tuple = ()  # picked interests that no eligible toy fits
+    unmatched_goals: tuple = ()
 
 
 EXCLUSION_LABELS = {
@@ -128,6 +130,7 @@ BOTH_BONUS = 2.0        # matches an interest *and* a goal
 MAX_INTERESTS_COUNTED = 2
 MAX_GOALS_COUNTED = 3
 MAX_REASONS = 6
+AGE_EDGE_PENALTY = 2.0  # the child is the oldest age a wide-range toy is made for
 
 
 def join_words(items) -> str:
@@ -147,6 +150,8 @@ def score(toy: ToyType, profile: Profile) -> Recommendation:
         points += BOTH_BONUS
     if not profile.interests and not profile.goals:
         points += 0.5 * len(toy.goals)  # nothing picked yet: favor versatile toys
+    if profile.age == toy.max_age and toy.max_age - toy.min_age >= 4:
+        points -= AGE_EDGE_PENALTY  # mostly aimed at younger kids, so it may feel young
 
     reasons = []
     if interests:
@@ -156,47 +161,31 @@ def score(toy: ToyType, profile: Profile) -> Recommendation:
     elif not profile.goals:
         reasons.append("Builds " + join_words(GOAL_PHRASES[g] for g in toy.goals[:2]))
 
+    # Only details that differ from toy to toy go on the card. Rules that every
+    # pick meets are stated once, above the results (see guarantees()).
     if profile.has("sound_sensitive"):
         if toy.noise == "quiet":
-            reasons.append("Quiet, with no electronic sounds")
             points += 0.5
         else:
-            reasons.append("Only makes sounds your child creates")
-    if profile.has("light_sensitive"):
-        reasons.append("No flashing lights")
+            reasons.append("Only makes gentle sounds your child creates")
     if profile.has("sensory_seeking") and toy.has("sensory_rich"):
         reasons.append("Lots of sensory input from texture, pressure, or movement")
         points += 3
-    if profile.has("mouths_objects"):
-        if toy.has("for_mouthers"):
-            reasons.append("Made to be mouthed safely")
-            points += 3
-        else:
-            reasons.append("No small parts or loose materials")
-    if profile.has("limited_grip"):
-        if toy.hands == "low":
-            reasons.append("Large, easy-to-grip pieces")
-            points += 2
-        else:
-            reasons.append("Needs some hand control, but no fine pinching")
-    if profile.has("limited_mobility"):
-        reasons.append("Can be played seated")
-    if profile.has("low_vision"):
-        if toy.has("touch_friendly"):
-            reasons.append("Easy to explore by touch")
-            points += 2
-        else:
-            reasons.append("Doesn't rely on seeing small details")
-    if profile.has("deaf_hoh"):
-        reasons.append("Doesn't depend on sound")
+    if profile.has("mouths_objects") and toy.has("for_mouthers"):
+        reasons.append("Made to be mouthed safely")
+        points += 3
+    if profile.has("limited_grip") and toy.hands == "low":
+        reasons.append("Large, easy-to-grip pieces")
+        points += 2
+    if profile.has("low_vision") and toy.has("touch_friendly"):
+        reasons.append("Easy to explore by touch")
+        points += 2
 
-    if profile.attention == "short":
-        reasons.append("Works in short bursts of play")
-    elif toy.min_focus == profile.attention:
-        reasons.append("Holds interest for 5 to 15 minutes" if profile.attention == "medium"
-                       else "Rewards longer focus")
     if toy.min_focus == profile.attention:
         points += 1
+        if profile.attention != "short":
+            reasons.append("Holds interest for 5 to 15 minutes" if profile.attention == "medium"
+                           else "Rewards longer focus")
 
     if profile.play_setting == "together" and toy.players == "2+":
         reasons.append("Made for playing together")
@@ -207,6 +196,30 @@ def score(toy: ToyType, profile: Profile) -> Recommendation:
 
 
 SAME_CATEGORY_PENALTY = 1.0  # small nudge toward variety; never outweighs a real match
+
+
+def guarantees(profile: Profile) -> list:
+    """Plain-language promises that every pick for this profile keeps."""
+    promises = []
+    if profile.has("mouths_objects"):
+        promises.append("has no small parts or materials that aren't safe to mouth")
+    elif profile.age < 3:
+        promises.append("has no small parts")
+    if profile.has("sound_sensitive"):
+        promises.append("has no loud or electronic sounds")
+    if profile.has("light_sensitive"):
+        promises.append("has no flashing lights")
+    if profile.has("limited_mobility"):
+        promises.append("can be played seated")
+    if profile.has("limited_grip"):
+        promises.append("needs no fine pinching")
+    if profile.has("low_vision"):
+        promises.append("doesn't depend on sight")
+    if profile.has("deaf_hoh"):
+        promises.append("doesn't depend on sound")
+    if profile.attention == "short":
+        promises.append("works in short bursts of play")
+    return promises
 
 
 def _select(ranked: list, profile: Profile, limit: int) -> list:
@@ -262,8 +275,13 @@ def recommend(profile: Profile, catalog=CATALOG, limit: int = 6) -> Results:
         eligible.append(rec)
     eligible.sort(key=lambda rec: (-rec.score, rec.toy.price_low, rec.toy.name))
     picks = _select(eligible, profile, limit)
+    unmatched_interests = tuple(i for i in profile.interests
+                                if not any(i in rec.matched_interests for rec in eligible))
+    unmatched_goals = tuple(g for g in profile.goals
+                            if not any(g in rec.matched_goals for rec in eligible))
     return Results(picks=tuple(picks), eligible=len(eligible), screened=len(catalog),
-                   excluded=excluded)
+                   excluded=excluded, unmatched_interests=unmatched_interests,
+                   unmatched_goals=unmatched_goals)
 
 
 # ---------------------------------------------------------------------------

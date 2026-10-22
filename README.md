@@ -8,7 +8,7 @@ Live demo: https://toyrecommender.streamlit.app/
 
 ## How it works
 
-1. **Screening.** Each of the 84 toy types in `catalog.py` is tagged with an age
+1. **Screening.** Each of the 85 toy types in `catalog.py` is tagged with an age
    range, typical price, noise level, flashing lights, small parts, how much hand
    control and mobility it takes, and whether it depends on sight or hearing. A toy
    that conflicts with the child's profile is removed by a hard rule, so a toy with

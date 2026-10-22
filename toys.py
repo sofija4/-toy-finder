@@ -20,7 +20,7 @@ import services
 from catalog import (ATTENTION, BUDGETS, CATALOG, EXAMPLES, GOALS, INTERESTS, NEEDS,
                      PLAY_SETTINGS)
 from recommender import (ADJUSTMENT_TIPS, EXCLUSION_LABELS, Profile, clean_ai_filters,
-                         pick_listing, recommend)
+                         guarantees, join_words, pick_listing, recommend)
 
 st.set_page_config(page_title="Inclusive Toy Finder", page_icon="🧸", layout="centered")
 log = logging.getLogger("toy_finder")
@@ -250,8 +250,19 @@ def render_results(profile: Profile) -> None:
         return
 
     count = len(results.picks)
-    st.write(f"{results.eligible} of {results.screened} toy types passed every filter. "
-             + ("Here's the best match." if count == 1 else f"Here are the {count} best matches."))
+    if count == results.eligible:
+        shown = "Here it is." if count == 1 else "Here they are."
+    else:
+        shown = f"Here are the {count} best matches."
+    promises = [f"is made for {age_phrase(profile.age)}"] + guarantees(profile)
+    st.write(f"{results.eligible} of {results.screened} toy types passed every filter. {shown} "
+             f"{'It' if count == 1 else 'Every pick'} {join_words(promises)}.")
+
+    missing = ([INTERESTS[i] for i in results.unmatched_interests]
+               + [GOALS[g] for g in results.unmatched_goals])
+    if missing:
+        st.info(f"None of the toys that passed your filters match {md(join_words(missing))}, "
+                "so these picks focus on your other choices.")
     if results.eligible < 3:
         render_adjustment_tip(results)
     render_exclusions(results)
@@ -294,8 +305,9 @@ def render_card(rec, listing, passed: int, fetched: bool) -> None:
         with text_column:
             st.subheader(md(toy.name), anchor=False)
             st.write(md(toy.blurb))
-            st.caption(f"Made for {age_range(toy)}. Usually "
-                       f"{money(toy.price_low)} to {money(toy.price_high)}.")
+            typical_price = ("" if listing else
+                             f" Usually {money(toy.price_low)} to {money(toy.price_high)}.")
+            st.caption(f"Made for {age_range(toy)}.{typical_price}")
             st.markdown("**Why it fits**\n\n" + "\n".join(f"- {md(r)}" for r in rec.reasons))
             if toy.caution:
                 st.caption(f"Good to know: {md(toy.caution)}")
