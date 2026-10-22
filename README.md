@@ -27,13 +27,9 @@ Live demo: https://toyrecommender.streamlit.app/
 
 ## Project structure
 
-| File | Purpose |
-| --- | --- |
-| `toys.py` | Streamlit interface |
-| `recommender.py` | Screening, ranking, and listing checks (no UI or network code) |
-| `catalog.py` | Toy types, their attributes, and form options |
-| `services.py` | SerpAPI and Claude API calls |
-| `test_recommender.py` | Unit tests, including an exhaustive check that no pick breaks a hard rule |
+The whole app lives in `toys.py`, organized in four labeled parts: the toy
+catalog, the rules and ranking, the outside services (SerpAPI and Claude), and
+the Streamlit interface. `requirements.txt` lists its two dependencies.
 
 ## Setup
 
@@ -56,10 +52,4 @@ On Streamlit Community Cloud, set these in the app's **Settings → Secrets** in
 
 ```bash
 streamlit run toys.py
-```
-
-## Test
-
-```bash
-python -m unittest -v
 ```
